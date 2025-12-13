@@ -1,3 +1,8 @@
+features = [
+    'edad', 'imc', 'grado_histologi', 'valor_de_ca125',
+    'infiltracion_mi', 'estadiaje_pre_i', 'tamano_tumoral',
+    'OS_MESES', 'DFS_MESES', 'diferencia_dias_reci_exit'
+]
 import pandas as pd
 import numpy as np
 from sklearn.impute import SimpleImputer
@@ -16,25 +21,53 @@ print("="*80)
 print("CLASSIFICADOR KNN PER RECIDIVA I RECIDIVA_EXITUS")
 print("="*80)
 
-# 1. CREAR DIFERENCIA_DIAS_RECI_EXIT
-print("\n1. Creant variable diferencia_dias_reci_exit...")
+# 1. CREAR/VERIFICAR DIFERENCIA_DIAS_RECI_EXIT
+print("\n1. Verificant i recalculant diferencia_dias_reci_exit...")
 
-def calcular_diferencia_dies(row):
-    """Calcula la diferència en dies entre recidiva i èxitus"""
-    try:
-        if pd.notna(row['fecha_de_recidi']) and pd.notna(row['f_muerte']):
-            fecha_reci = pd.to_datetime(row['fecha_de_recidi'])
-            fecha_muerte = pd.to_datetime(row['f_muerte'])
-            diferencia = (fecha_muerte - fecha_reci).days
-            return diferencia
-    except:
+# Convertir dates si no ho estan
+date_cols = ['f_diag', 'fecha_de_recidi', 'f_muerte', 'Ultima_fecha']
+for col in date_cols:
+    if col in df.columns:
+        df[col] = pd.to_datetime(df[col], errors='coerce')
+
+# Recalcular diferencia_dias_reci_exit segons la definició correcta
+if 'f_diag' in df.columns:
+    def calcular_diferencia_correcta(row):
+        """
+        Dies des del diagnòstic fins a recidiva/mort/últim seguiment
+        (el que passi primer)
+        """
+        try:
+            if pd.isna(row['f_diag']):
+                return np.nan
+            
+            # Buscar la data final (el que passi primer)
+            dates_finals = []
+            if pd.notna(row.get('fecha_de_recidi')):
+                dates_finals.append(row['fecha_de_recidi'])
+            if pd.notna(row.get('f_muerte')):
+                dates_finals.append(row['f_muerte'])
+            if pd.notna(row.get('Ultima_fecha')):
+                dates_finals.append(row['Ultima_fecha'])
+            
+            if dates_finals:
+                # Agafar la primera data que passi
+                data_final = min(dates_finals)
+                diferencia = (data_final - row['f_diag']).days
+                return diferencia
+        except:
+            pass
         return np.nan
-    return np.nan
-
-df['diferencia_dias_reci_exit'] = df.apply(calcular_diferencia_dies, axis=1)
-
-print(f"   - Variable creada correctament")
-print(f"   - Casos amb diferència calculada: {df['diferencia_dias_reci_exit'].notna().sum()}")
+    
+    df['diferencia_dias_reci_exit'] = df.apply(calcular_diferencia_correcta, axis=1)
+    casos_amb_dif = df['diferencia_dias_reci_exit'].notna().sum()
+    pct = (casos_amb_dif / len(df)) * 100
+    print(f"   ✓ Variable recalculada correctament")
+    print(f"   - Disponibilitat: {casos_amb_dif}/{len(df)} ({pct:.1f}%)")
+else:
+    print("   ✗ No es pot calcular (falta 'f_diag')")
+    casos_amb_dif = 0
+    pct = 0
 
 # 2. PREPARAR FEATURES PER KNN
 print("\n2. Preparant features per KNN...")
@@ -46,8 +79,17 @@ features = [
 ]
 
 print(f"   - Features seleccionades: {len(features)}")
+
+# Verificar disponibilitat de cada feature
+print("\n   Disponibilitat de features:")
 for f in features:
-    print(f"     · {f}")
+    if f in df.columns:
+        disponibilitat = df[f].notna().sum()
+        percentatge = (disponibilitat / len(df)) * 100
+        status = "✓" if percentatge >= 50 else "⚠️"
+        print(f"     {status} {f:30} → {disponibilitat:3}/{len(df)} ({percentatge:5.1f}%)")
+    else:
+        print(f"     ✗ {f:30} → NO DISPONIBLE")
 
 # 3. RECLASSIFICAR RECIDIVA
 print("\n" + "="*80)

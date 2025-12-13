@@ -1,113 +1,129 @@
 import pandas as pd
 import numpy as np
+import os
+import sys
 
-# --- 1. CARGA DE DATOS ---
-print("⏳ Cargando base de datos completa...")
-# Usamos openpyxl para leer el Excel
-df = pd.read_excel('datos.xlsx', engine='openpyxl')
+# --- 1. CONFIGURACIÓ ---
+carpeta = 'C:/Users/Carmen/Desktop/Bitsxlamarato/'
+fitxer_entrada = os.path.join(carpeta, 'datos.xlsx')
+fitxer_csv = os.path.join(carpeta, 'Dataset_NEST_Final.csv')
+fitxer_pdf = os.path.join(carpeta, 'Vista_Datos.pdf')
 
-# --- 2. SELECCIÓN EXTENDIDA DE VARIABLES (Basada en Leyenda y Proyecto NEST) ---
-# Organizamos las variables por bloques para que sepas qué estás analizando.
+print(f"⏳ Llegint dades de: {fitxer_entrada}")
 
-cols_clinicas = [
-    'edad', 
-    'imc', 
-    'asa',                  # Riesgo anestésico (refleja estado físico general)
-    'valor_de_ca125'        # Biomarcador en sangre
+try:
+    df = pd.read_excel(fitxer_entrada, engine='openpyxl')
+except ImportError:
+    print("❌ ERROR: Falta 'openpyxl'. Instal·la'l amb: pip install openpyxl")
+    sys.exit()
+except FileNotFoundError:
+    print("❌ ERROR: No trobo 'datos.xlsx'.")
+    sys.exit()
+
+print(f"✓ Llegides {len(df)} files i {len(df.columns)} columnes")
+
+# --- 2. VERIFICAR SI DIFERENCIA_DIAS_RECI_EXIT EXISTEIX ---
+print("\n🔍 Verificant columnes crítiques...")
+if 'diferencia_dias_reci_exit' in df.columns:
+    print("   ✓ diferencia_dias_reci_exit trobada!")
+    print(f"     Valors disponibles: {df['diferencia_dias_reci_exit'].notna().sum()}/{len(df)}")
+else:
+    print("   ⚠️  diferencia_dias_reci_exit NO trobada a l'Excel original")
+
+if 'recidiva_exitus' in df.columns:
+    print("   ✓ recidiva_exitus trobada!")
+    print(f"     Valors disponibles: {df['recidiva_exitus'].notna().sum()}/{len(df)}")
+else:
+    print("   ⚠️  recidiva_exitus NO trobada a l'Excel original")
+
+# --- 3. SELECCIÓ I CÀLCULS ---
+print("\n⚙️ Processant dades i calculant supervivència...")
+
+variables_desitjades = [
+    'codigo_participante', 'FN', 'edad', 'imc', 'f_diag', 'fecha_qx',
+    'tipo_histologico', 'grado_histologi', 'valor_de_ca125', 
+    'infiltracion_mi', 'ecotv_infiltobj', 'ecotv_infiltsub',
+    'metasta_distan', 'grupo_riesgo', 'estadiaje_pre_i', 
+    'tto_NA', 'tto_1_quirugico', 'asa',
+    'histo_defin', 'tamano_tumoral', 'afectacion_linf',
+    'AP_centinela_pelvico', 'AP_ganPelv', 'AP_glanPaor',
+    'recep_est_porcent', 'rece_de_Ppor', 'beta_cateninap', 
+    'estudio_genetico', 'mut_pole', 'p53_ihq', 
+    'FIGO2023', 'estadificacion', 'grupo_de_riesgo_definitivo',
+    'Tributaria_a_Radioterapia', 'rdt', 'bqt', 'qt', 'Tratamiento_sistemico_realizad',
+    'visita_control', 'Ultima_fecha', 
+    'recidiva', 'recidiva_exitus', 'diferencia_dias_reci_exit',  # ← AFEGIDES AQUÍ!
+    'estado', 'est_pcte',
+    'causa_muerte', 'f_muerte', 'libre_enferm', 
+    'numero_de_recid', 'num_recidiva', 'fecha_de_recidi',
+    'loc_recidiva', 'loc_recidiva_r01', 
+    'tto_recidiva', 'Tt_recidiva_qx', 'Reseccion_macroscopica_com'
 ]
 
-cols_patologia_tumor = [
-    'tipo_histologico',     # Tipo pre-qx
-    'histo_defin',          # Tipo definitivo (El "Gold Standard")
-    'grado_histologi',      # Grado de diferenciación (1, 2, 3)
-    'tamano_tumoral',       # Tamaño en mm/cm
-    'infiltracion_mi',      # ¿Cuánto invade el útero? (<50% o >50%)
-    'afectacion_linf',      # Invasión linfovascular (LVSI) - CRÍTICO para riesgo
-    'infilt_estr_cervix',   # ¿Invade el cuello uterino?
-    'inf_param_vag',        # ¿Invade parametrios o vagina?
-    'estadiaje_pre_i',      # Estadio antes de operar
-    'FIGO2023'              # Estadio FIGO oficial (2018/2023)
-]
+cols_existents = [c for c in variables_desitjades if c in df.columns]
+print(f"   Variables seleccionades: {len(cols_existents)}/{len(variables_desitjades)}")
 
-cols_ganglios = [
-    'AP_centinela_pelvico', # ¿Ganglio centinela positivo?
-    'AP_ganPelv',           # ¿Ganglios pélvicos afectados?
-    'AP_glanPaor',          # ¿Ganglios paraaórticos afectados?
-    'n_GC_Afect',           # Número de ganglios centinelas afectados
-]
+# Mostrar quines NO s'han trobat
+cols_no_trobades = [c for c in variables_desitjades if c not in df.columns]
+if cols_no_trobades:
+    print(f"   ⚠️  Variables NO trobades a l'Excel ({len(cols_no_trobades)}):")
+    for col in cols_no_trobades:
+        print(f"      - {col}")
 
-cols_molecular = [
-    'recep_est_porcent',    # Receptores Estrógenos (%) - CLAVE para NSMP
-    'rece_de_Ppor',         # Receptores Progesterona (%)
-    'p53_ihq',              # Inmunohistoquímica p53 (Wild type vs Mutated)
-    'mut_pole',             # Mutación POLE (para descartar/confirmar grupo)
-    'msh6', 'msh2', 'pms2', 'mlh1' # Proteínas MMR (para descartar inestabilidad)
-]
+df_final = df[cols_existents].copy()
 
-cols_tratamiento = [
-    'tto_1_quirugico',      # Tipo de cirugía
-    'Tributaria_a_Radioterapia', # ¿Se indicó radio?
-    'rdt',                  # ¿Recibió Radioterapia externa?
-    'bqt',                  # ¿Recibió Braquiterapia?
-    'qt',                   # ¿Recibió Quimioterapia?
-    'Tratamiento_sistemico_realizad' # Detalle sistémico
-]
+# Conversió dates
+cols_data = ['fecha_qx', 'fecha_de_recidi', 'f_muerte', 'visita_control', 'Ultima_fecha']
+for col in cols_data:
+    if col in df_final.columns:
+        df_final[col] = pd.to_datetime(df_final[col], errors='coerce')
 
-cols_outcome = [
-    'recidiva',             # TARGET 1: ¿Recayó? (Sí/No)
-    'estado',               # TARGET 2: Estado vital (Vivo/Exitus)
-    'causa_muerte',         # ¿Murió por cáncer o por otra cosa?
-    'fecha_qx',             # Fecha base (cirugía)
-    'fecha_de_recidi',      # Fecha del evento (recaída)
-    'f_muerte',             # Fecha del evento (muerte)
-    'Ultima_fecha',         # Fecha de último contacto (censura)
-    'loc_recidiva_r01'      # Dónde recayó (local, pélvica, a distancia)
-]
+# Càlcul OS i DFS
+if 'fecha_qx' in df_final.columns:
+    # OS
+    data_fin_os = df_final['f_muerte'].fillna(df_final.get('visita_control', df_final.get('Ultima_fecha')))
+    df_final['OS_MESES'] = (data_fin_os - df_final['fecha_qx']).dt.days / 30.44
+    
+    # DFS
+    data_fin_dfs = df_final['fecha_de_recidi'].fillna(df_final.get('visita_control', df_final.get('Ultima_fecha')))
+    df_final['DFS_MESES'] = (data_fin_dfs - df_final['fecha_qx']).dt.days / 30.44
 
-# Unimos todas las listas
-todas_las_variables = cols_clinicas + cols_patologia_tumor + cols_ganglios + cols_molecular + cols_tratamiento + cols_outcome
+# --- 4. SI DIFERENCIA_DIAS_RECI_EXIT NO EXISTIA, INTENTAR CREAR-LA ---
+if 'diferencia_dias_reci_exit' not in df_final.columns:
+    print("\n⚙️ diferencia_dias_reci_exit no existeix, intentant calcular-la...")
+    if 'fecha_de_recidi' in df_final.columns and 'f_muerte' in df_final.columns:
+        def calcular_dif(row):
+            try:
+                if pd.notna(row['fecha_de_recidi']) and pd.notna(row['f_muerte']):
+                    return (row['f_muerte'] - row['fecha_de_recidi']).days
+            except:
+                pass
+            return np.nan
+        
+        df_final['diferencia_dias_reci_exit'] = df_final.apply(calcular_dif, axis=1)
+        print(f"   ✓ Calculada: {df_final['diferencia_dias_reci_exit'].notna().sum()} casos")
+    else:
+        print("   ✗ No es pot calcular (falten dates)")
 
-# Filtramos para coger solo las que realmente existen en el Excel (por si algún nombre varía ligeramente)
-cols_existentes = [c for c in todas_las_variables if c in df.columns]
-missing_cols = [c for c in todas_las_variables if c not in df.columns]
+# --- 5. EXPORTAR A CSV ---
+print(f"\n💾 Guardant CSV a: {fitxer_csv}")
+df_final.to_csv(fitxer_csv, index=False, sep=',')
+print(f"   ✓ Guardat amb {len(df_final)} files i {len(df_final.columns)} columnes")
 
-print(f"✅ Variables encontradas: {len(cols_existentes)} de {len(todas_las_variables)}")
-if missing_cols:
-    print(f"⚠️ Advertencia: No encontré estas columnas (revisa nombres): {missing_cols}")
-
-# Creamos el dataset limpio
-df_nest = df[cols_existentes].copy()
-
-# --- 3. INGENIERÍA DE VARIABLES (CÁLCULO DE TIEMPOS) ---
-print("⚙️ Calculando tiempos de supervivencia...")
-
-# Convertir a formato fecha
-fechas_clave = ['fecha_qx', 'fecha_de_recidi', 'f_muerte', 'Ultima_fecha']
-for col in fechas_clave:
-    if col in df_nest.columns:
-        df_nest[col] = pd.to_datetime(df_nest[col], errors='coerce')
-
-# A) TIEMPO LIBRE DE ENFERMEDAD (Disease-Free Survival - DFS)
-# Si recayó, fecha fin = recidiva. Si no, fecha fin = ultima visita.
-if 'fecha_qx' in df_nest.columns:
-    df_nest['DFS_fecha_fin'] = df_nest['fecha_de_recidi'].fillna(df_nest['Ultima_fecha'])
-    df_nest['DFS_MESES'] = (df_nest['DFS_fecha_fin'] - df_nest['fecha_qx']).dt.days / 30.44
-
-# B) SUPERVIVENCIA GLOBAL (Overall Survival - OS)
-# Si murió, fecha fin = muerte. Si vive, fecha fin = ultima visita.
-    df_nest['OS_fecha_fin'] = df_nest['f_muerte'].fillna(df_nest['Ultima_fecha'])
-    df_nest['OS_MESES'] = (df_nest['OS_fecha_fin'] - df_nest['fecha_qx']).dt.days / 30.44
-
-# Limpieza final: Eliminar filas sin datos de tiempo (errores de fecha)
-df_nest = df_nest[df_nest['DFS_MESES'] > 0]
-
-# --- 4. GUARDADO ---
-nombre_salida = 'Dataset_NEST_Completo.csv'
-df_nest.to_csv(nombre_salida, index=False)
-
-print("\n------------------------------------------------")
-print(f"🚀 ¡LISTO! Dataset completo guardado como: {nombre_salida}")
-print(f"Dimensiones finales: {df_nest.shape[0]} pacientes x {df_nest.shape[1]} variables")
-print("------------------------------------------------")
-print("Primeras 5 filas del dataset listo para IA:")
-print(df_nest[['recidiva', 'DFS_MESES', 'edad', 'FIGO2023', 'recep_est_porcent']].head())
+# --- 6. RESUM FINAL ---
+print("\n" + "="*80)
+print("✅ PROCÉS FINALITZAT")
+print("="*80)
+print(f"📂 CSV: {fitxer_csv}")
+print(f"\n📊 VARIABLES CRÍTIQUES AL CSV FINAL:")
+if 'recidiva' in df_final.columns:
+    print(f"   ✓ recidiva: {df_final['recidiva'].notna().sum()}/{len(df_final)}")
+if 'recidiva_exitus' in df_final.columns:
+    print(f"   ✓ recidiva_exitus: {df_final['recidiva_exitus'].notna().sum()}/{len(df_final)}")
+if 'diferencia_dias_reci_exit' in df_final.columns:
+    print(f"   ✓ diferencia_dias_reci_exit: {df_final['diferencia_dias_reci_exit'].notna().sum()}/{len(df_final)}")
+if 'OS_MESES' in df_final.columns:
+    print(f"   ✓ OS_MESES: {df_final['OS_MESES'].notna().sum()}/{len(df_final)}")
+if 'DFS_MESES' in df_final.columns:
+    print(f"   ✓ DFS_MESES: {df_final['DFS_MESES'].notna().sum()}/{len(df_final)}")
+print("="*80)
