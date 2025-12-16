@@ -5,18 +5,22 @@ from datetime import datetime
 import json
 import numpy as np
 import xgboost as xgb
+import shap
+from groq import Groq
 
 # Configuración de la página
 st.set_page_config(
-    page_title="NEST - Endometrial Stratification Tool",
+    page_title="Hack the Uterus!",
     layout="wide"
 )
 
 # Añadir tipografía formal
 st.markdown("""
 <style>
+    /* IMPORTAR FUENTE GARAMOND */
     @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;600;700&display=swap');
     
+    /* 1. APLICAR GARAMOND A TODO POR DEFECTO */
     * {
         font-family: 'EB Garamond', serif !important;
     }
@@ -50,6 +54,37 @@ st.markdown("""
     div[data-testid="stMarkdownContainer"] {
         font-family: 'EB Garamond', serif !important;
     }
+
+    /* ================================================================= */
+    /* 🛠️ EL FIX DEL BOTÓN (ESTA ES LA PARTE NUEVA QUE ARREGLA EL ERROR) */
+    /* ================================================================= */
+    
+    /* 1. Reseteamos la fuente del contenedor del botón para que el ICONO (flecha)
+          use la fuente del sistema y no Garamond (que es lo que lo rompía) */
+    div[data-testid="stExpander"] summary {
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif !important;
+    }
+
+    /* 2. Forzamos que EL TEXTO del título (ej: "Ver Gráficos") vuelva a ser Garamond */
+    div[data-testid="stExpander"] summary p {
+        font-family: 'EB Garamond', serif !important;
+        font-size: 1.05rem !important;
+        font-weight: 600 !important;
+    }
+    
+    /* 3. Ajuste fino del borde para que se vea elegante */
+    div[data-testid="stExpander"] {
+        border: 1px solid rgba(250, 250, 250, 0.2) !important;
+        border-radius: 8px !important;
+        margin-top: 1rem !important;
+        margin-bottom: 1rem !important;
+    }
+    
+    /* 4. Fix para el contenido del expander */
+    div[data-testid="stExpander"] div[data-testid="stExpanderDetails"] {
+        font-family: 'EB Garamond', serif !important;
+    }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,8 +162,8 @@ def predecir_con_modelo(datos, modelo, umbral=UMBRAL_OPTIMO):
 
 # ==================== INTERFAZ STREAMLIT ====================
 
-st.title("🔬 NEST - NSMP Endometrial Stratification Tool")
-st.markdown("### Calculadora de Riesgo para Cáncer Endometrial NSMP")
+st.title("Hack the Uterus!")
+st.markdown("### Calculadora de Riesgo de Recidiva para pacientes de Cáncer Endometrial NSMP")
 
 if modelo is not None:
     st.success("Modelo XGBoost activo (35 features clínicas)")
@@ -521,7 +556,7 @@ if submitted:
         st.markdown("---")
         st.header("Resultados del Análisis")
         
-        st.info(f"🤖 **Modelo:** XGBoost (35 features) | 🎯 **Umbral:** {UMBRAL_OPTIMO:.2f}")
+        st.info(f"**Modelo:** XGBoost (35 features) | **Umbral:** {UMBRAL_OPTIMO:.2f}")
         
         col_res1, col_res2, col_res3 = st.columns(3)
         
@@ -537,15 +572,15 @@ if submitted:
             clasificacion = "ALTO RIESGO" if clase_predicha == 1 else "BAJO RIESGO"
             delta_color = "inverse" if clase_predicha == 1 else "normal"
             st.metric("Clasificación", clasificacion, 
-                     delta="⚠️" if clase_predicha == 1 else "✅",
+                     delta="" if clase_predicha == 1 else "✅",
                      delta_color=delta_color)
         
         # Interpretación
         if clase_predicha == 0:
-            st.success(f"🟢 **Bajo riesgo de recidiva** detectado (probabilidad: {prob_recidiva*100:.1f}%)")
+            st.success(f"**Bajo riesgo de recidiva** detectado (probabilidad: {prob_recidiva*100:.1f}%)")
             st.info("**Recomendación:** Vigilancia activa con seguimiento regular")
         else:
-            st.error(f"🔴 **Alto riesgo de recidiva** detectado (probabilidad: {prob_recidiva*100:.1f}%)")
+            st.error(f"**Alto riesgo de recidiva** detectado (probabilidad: {prob_recidiva*100:.1f}%)")
             st.warning("**Recomendación:** Considerar terapia adyuvante intensiva")
         
         # Gráfico gauge
@@ -576,8 +611,149 @@ if submitted:
         st.plotly_chart(fig_gauge, use_container_width=True)
         
         st.warning("""
-        ⚠️ **Nota Importante**: 
+         **Nota Importante**: 
         - Esta herramienta está en fase de validación clínica
         - Los resultados deben interpretarse por un profesional médico
         - El umbral ha sido optimizado para maximizar la sensibilidad
         """)
+
+    # ==================== EXPLICABILIDAD CON IA (SHAP + LLM) ====================
+
+    # ---------------- CONFIGURACIÓN API (PON TU CLAVE AQUÍ) ----------------
+    api_key_groq = "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" 
+
+    def generar_explicacion_llm(modelo, X_paciente, clase_predicha, prob_recidiva):
+        try:
+            # 1. CÁLCULO MATEMÁTICO (SHAP)
+            explainer = shap.TreeExplainer(modelo)
+            shap_values = explainer.shap_values(X_paciente)
+            
+            feature_names = X_paciente.columns.tolist()
+            values = X_paciente.values[0]
+            
+            feature_importance = list(zip(feature_names, values, shap_values[0]))
+            # Ordenar por impacto absoluto
+            feature_importance.sort(key=lambda x: abs(x[2]), reverse=True)
+            top_features = feature_importance[:8] # Tomamos las 8 más importantes para el contexto
+            
+            datos_texto = "\n".join([
+                f"- {feat}: Valor={val} (Impacto: {'Aumenta riesgo' if shap_val > 0 else 'Disminuye riesgo'})"
+                for feat, val, shap_val in top_features
+            ])
+            
+            decision_texto = "ALTO RIESGO" if clase_predicha == 1 else "BAJO RIESGO"
+            
+            # 2. GENERACIÓN DE TEXTO CON LLM (GROQ)
+            client = Groq(api_key=api_key_groq)
+            
+            # PROMPT MEJORADO PARA MÁS DETALLE
+            prompt = f"""
+            Actúa como un oncólogo especialista en cáncer de endometrio. Estás analizando un caso clínico.
+            
+            RESULTADO DEL MODELO:
+            - Predicción: {decision_texto} de Recidiva
+            - Probabilidad calculada: {prob_recidiva*100:.1f}%
+            
+            FACTORES DETERMINANTES (Ordenados por impacto):
+            {datos_texto}
+            
+            TAREA:
+            Genera un informe clínico detallado (aprox. 8-10 líneas) explicando la decisión.
+            Estructura tu respuesta así:
+            
+            **Análisis de Riesgo:**
+            Por qué la probabilidad es esa.
+            
+            **Factores Agravantes:**
+            Qué variables están empujando el riesgo hacia arriba.
+            
+            **Factores Protectores:**
+            Si hay alguna variable que ayude a bajar el riesgo.
+            
+            Usa lenguaje médico profesional, empático pero técnico. Usa markdown para formatear (** para negritas).
+            """
+
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile", 
+                messages=[
+                    {"role": "system", "content": "Eres un asistente médico experto y detallista."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=600
+            )
+            
+            return completion.choices[0].message.content
+
+        except Exception as e:
+            return f"Error en la IA: {str(e)}"
+
+    
+    # ---------------- INTERFAZ VISUAL EN STREAMLIT ----------------
+
+    st.markdown("---")
+    st.subheader("Interpretación Clínica del Modelo")
+
+    with st.spinner("Analizando patrones moleculares y clínicos..."):
+        # Convertimos el diccionario 'datos_modelo' en DataFrame para SHAP
+        X_df = pd.DataFrame([datos_modelo])
+        
+        if 'api_key_groq' in locals() and api_key_groq != "TU_API_KEY_DE_GROQ_AQUI":
+            explicacion = generar_explicacion_llm(modelo, X_df, clase_predicha, prob_recidiva)
+            
+            # CSS: FONDO NEGRO Y TEXTO RENDERIZADO CON MARKDOWN
+            st.markdown(f"""
+            <div style='background-color: #0E1117; color: #ffffff; padding: 25px; border-radius: 10px; border: 1px solid #333; border-left: 5px solid #ff4b4b; margin-bottom: 20px;'>
+                <h4 style='color: #ffffff; margin-top: 0; font-family: EB Garamond, serif;'>Informe de Inteligencia Artificial</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Renderizar el texto de Groq con markdown para que se vean las negritas
+            st.markdown(explicacion)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Título de la sección
+            st.markdown("#### Desglose Gráfico de Variables (SHAP)")
+            st.markdown("---")
+
+            import matplotlib.pyplot as plt
+
+            # Recalcular valores para graficar
+            explainer = shap.TreeExplainer(modelo)
+            shap_values_obj = explainer(X_df)
+            shap_values_data = shap_values_obj[0].values
+            feature_names = X_df.columns.tolist()
+
+            # --- GRÁFICO 1 Y 2 EN DOS COLUMNAS ---
+            col_graf1, col_graf2 = st.columns(2)
+
+            with col_graf1:
+                st.markdown("##### Factores de Mayor Impacto")
+                
+                # Crear datos para el gráfico de barras
+                indices = np.argsort(np.abs(shap_values_data))[-10:] # Top 10
+                top_shap = shap_values_data[indices]
+                top_names = [feature_names[i] for i in indices]
+                
+                # Colores: Rojo si aumenta riesgo, Azul si disminuye
+                colors = ['#ff4b4b' if x > 0 else '#1f77b4' for x in top_shap]
+                
+                fig_bar, ax = plt.subplots(figsize=(6, 4))
+                ax.barh(range(len(top_shap)), top_shap, color=colors)
+                ax.set_yticks(range(len(top_shap)))
+                ax.set_yticklabels(top_names, fontsize=8)
+                ax.set_xlabel("Impacto SHAP", fontsize=9)
+                ax.axvline(0, color='black', linewidth=0.5)
+                plt.tight_layout()
+                st.pyplot(fig_bar)
+
+            with col_graf2:
+                st.markdown("##### Desglose Detallado (Waterfall)")
+                
+                fig_shap, ax = plt.subplots(figsize=(6, 4))
+                shap.plots.waterfall(shap_values_obj[0], show=False, max_display=10)
+                plt.tight_layout()
+                st.pyplot(fig_shap)
+
+            
